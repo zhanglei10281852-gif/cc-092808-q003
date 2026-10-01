@@ -297,6 +297,20 @@ class ReleaseDecision(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class ReleaseCancel(BaseModel):
+    expected_version: int = Field(gt=0)
+    actor: str = Field(min_length=1, max_length=100)
+    reason: str = Field(default="申请取消", min_length=2, max_length=500)
+
+
+class ReleaseFulfill(BaseModel):
+    actor: str = Field(min_length=1, max_length=100)
+
+
+class AllocationRepair(BaseModel):
+    actor: str = Field(default="system-repair", min_length=1, max_length=100)
+
+
 class Page(BaseModel):
     items: list[dict[str, Any]]
     total: int

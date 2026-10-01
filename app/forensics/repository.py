@@ -14,6 +14,9 @@ JSON_COLUMNS = {
     "payload_json": "payload",
 }
 
+# custody_events.quantity 以负数登记耗用（取样/领用/报废），以正数登记归还与盘点调整
+CONSUMED_MOVEMENT_TYPES = ("取样", "领用", "报废", "归还", "盘点调整")
+
 
 def record(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
@@ -115,6 +118,57 @@ class ForensicRepository:
             "SELECT * FROM specimen_holds WHERE specimen_id=? AND released_at IS NULL ORDER BY id", (specimen_id,)
         ).fetchall())
 
+    def consumed_quantity(self, specimen_id: int) -> float:
+        """实际耗用净额：耗用流水记负数，归还与盘点调整记正数。"""
+        placeholders = ",".join("?" for _ in CONSUMED_MOVEMENT_TYPES)
+        row = self.connection.execute(
+            f"SELECT COALESCE(SUM(quantity),0) FROM custody_events "
+            f"WHERE specimen_id=? AND movement_type IN ({placeholders})",
+            (specimen_id, *CONSUMED_MOVEMENT_TYPES),
+        ).fetchone()
+        return round(-float(row[0]), 6)
+
+    def held_quantity(self, specimen_id: int) -> float:
+        """尚未履行的批准占用总量（不含已转真实耗用与已释放）。"""
+        row = self.connection.execute(
+            "SELECT COALESCE(SUM(quantity),0) FROM specimen_allocations WHERE specimen_id=? AND status='held'",
+            (specimen_id,),
+        ).fetchone()
+        return round(float(row[0]), 6)
+
+    def availability(self, specimen_id: int) -> dict[str, Any]:
+        specimen = self.require_specimen(specimen_id)
+        consumed = self.consumed_quantity(specimen_id)
+        held = self.held_quantity(specimen_id)
+        allocatable = round(float(specimen["initial_quantity"]) - consumed - held, 6)
+        return {
+            "specimen_id": specimen_id,
+            "initial_quantity": float(specimen["initial_quantity"]),
+            "recorded_available_quantity": float(specimen["available_quantity"]),
+            "consumed_quantity": consumed,
+            "held_quantity": held,
+            "allocatable_quantity": max(allocatable, 0.0),
+            "frozen": bool(self.active_holds(specimen_id)),
+        }
+
+    def allocations_for_specimen(self, specimen_id: int) -> list[dict[str, Any]]:
+        return records(self.connection.execute(
+            "SELECT c.*,r.request_no,r.status AS request_status "
+            "FROM specimen_allocations c JOIN release_requests r ON r.id=c.request_id "
+            "WHERE c.specimen_id=? ORDER BY c.id",
+            (specimen_id,),
+        ).fetchall())
+
+    def allocation_for_item(self, release_item_id: int) -> dict[str, Any] | None:
+        return record(self.connection.execute(
+            "SELECT * FROM specimen_allocations WHERE release_item_id=?", (release_item_id,)
+        ).fetchone())
+
+    def held_allocations_for_request(self, request_id: int) -> list[dict[str, Any]]:
+        return records(self.connection.execute(
+            "SELECT * FROM specimen_allocations WHERE request_id=? AND status='held' ORDER BY id", (request_id,)
+        ).fetchall())
+
     def specimen_detail(self, specimen_id: int) -> dict[str, Any]:
         item = self.require_specimen(specimen_id)
         item["forensic_case"] = self.require_forensic_case(int(item["case_id"]))
@@ -128,6 +182,12 @@ class ForensicRepository:
         item["holds"] = records(self.connection.execute(
             "SELECT * FROM specimen_holds WHERE specimen_id=? ORDER BY id", (specimen_id,)
         ).fetchall())
+        item["allocations"] = self.allocations_for_specimen(specimen_id)
+        availability = self.availability(specimen_id)
+        item["consumed_quantity"] = availability["consumed_quantity"]
+        item["held_quantity"] = availability["held_quantity"]
+        item["allocatable_quantity"] = availability["allocatable_quantity"]
+        item["frozen"] = availability["frozen"]
         item["latest_examination"] = record(self.connection.execute(
             "SELECT * FROM examinations WHERE specimen_id=? AND status='completed' ORDER BY completed_at DESC,id DESC LIMIT 1",
             (specimen_id,),
@@ -196,10 +256,13 @@ class ForensicRepository:
 
     def release_detail(self, request_id: int) -> dict[str, Any]:
         item = self.require_release(request_id)
-        item["items"] = records(self.connection.execute(
+        rows = records(self.connection.execute(
             "SELECT i.*,a.case_no,a.discipline FROM release_items i "
             "JOIN forensic_cases a ON a.id=i.case_id WHERE i.request_id=? ORDER BY i.id", (request_id,)
         ).fetchall())
+        for line in rows:
+            line["allocation"] = self.allocation_for_item(int(line["id"]))
+        item["items"] = rows
         return item
 
     def count_table(self, table: str) -> int:

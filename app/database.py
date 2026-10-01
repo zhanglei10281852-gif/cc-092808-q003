@@ -375,6 +375,22 @@ CREATE TABLE IF NOT EXISTS release_items (
     status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN ('requested','allocated','fulfilled','unavailable')),
     UNIQUE(request_id,case_id)
 );
+CREATE TABLE IF NOT EXISTS specimen_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    specimen_id INTEGER NOT NULL REFERENCES specimens(id) ON DELETE RESTRICT,
+    release_item_id INTEGER NOT NULL REFERENCES release_items(id) ON DELETE RESTRICT,
+    request_id INTEGER NOT NULL REFERENCES release_requests(id) ON DELETE RESTRICT,
+    quantity REAL NOT NULL CHECK(quantity > 0),
+    status TEXT NOT NULL DEFAULT 'held' CHECK(status IN ('held','consumed','released')),
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    consumed_at TEXT,
+    released_at TEXT,
+    release_reason TEXT NOT NULL DEFAULT '',
+    UNIQUE(release_item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_allocations_specimen ON specimen_allocations(specimen_id,status);
+CREATE INDEX IF NOT EXISTS idx_allocations_request ON specimen_allocations(request_id,status);
 CREATE TABLE IF NOT EXISTS outbox_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_key TEXT NOT NULL UNIQUE,

@@ -24,6 +24,7 @@ def check_command() -> dict:
     required = {
         "forensic_cases", "specimens", "storage_locations", "examinations",
         "review_schedules", "quality_alerts", "outbox_events",
+        "release_requests", "release_items", "specimen_allocations",
     }
     actual = {
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
@@ -110,6 +111,19 @@ def export_command(path: str) -> dict:
     return {"path": str(target), "count": total}
 
 
+def audit_allocations_command(specimen_id: int | None) -> dict:
+    init_db()
+    service = ForensicService(get_connection())
+    return service.release.audit_allocations(specimen_id)
+
+
+def repair_allocations_command(specimen_id: int | None, actor: str) -> dict:
+    init_db()
+    service = ForensicService(get_connection())
+    with transaction(immediate=True):
+        return service.release.repair_allocations(specimen_id, actor=actor)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="司法鉴定机构运维命令")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -119,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("demo", help="写入一组示范入库数据")
     export = subparsers.add_parser("export-forensic_cases", help="导出案件档案")
     export.add_argument("path")
+    audit = subparsers.add_parser("audit-allocations", help="核对领用占用与检材可分配量")
+    audit.add_argument("--specimen-id", type=int, default=None)
+    repair = subparsers.add_parser("repair-allocations", help="修复遗留领用占用与账面可分配量")
+    repair.add_argument("--specimen-id", type=int, default=None)
+    repair.add_argument("--actor", default="system-repair")
     return parser
 
 
@@ -133,6 +152,10 @@ def main() -> int:
             result = smoke_command()
         elif args.command == "demo":
             result = demo_command()
+        elif args.command == "audit-allocations":
+            result = audit_allocations_command(args.specimen_id)
+        elif args.command == "repair-allocations":
+            result = repair_allocations_command(args.specimen_id, args.actor)
         else:
             result = export_command(args.path)
         print(json.dumps(result, ensure_ascii=False, indent=2))

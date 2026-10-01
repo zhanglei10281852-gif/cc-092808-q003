@@ -227,15 +227,22 @@ class CustodyService:
             "SELECT COALESCE(SUM(quantity),0) FROM custody_events WHERE specimen_id=? AND movement_type IN ('取样','领用','报废','归还','盘点调整')",
             (specimen_id,),
         ).fetchone()[0])
-        expected_available = round(float(specimen["initial_quantity"]) + movement_total, 6)
+        physical_available = round(float(specimen["initial_quantity"]) + movement_total, 6)
+        held_quantity = self.repository.held_quantity(specimen_id)
+        expected_recorded = round(physical_available - held_quantity, 6)
         placed_weight = float(self.connection.execute(
             "SELECT COALESCE(SUM(quantity),0) FROM specimen_placements WHERE specimen_id=? AND removed_at IS NULL", (specimen_id,)
         ).fetchone()[0])
         return {
             "specimen_id": specimen_id,
             "recorded_available_grams": specimen["available_quantity"],
-            "expected_available_grams": expected_available,
+            "physical_available_grams": max(physical_available, 0.0),
+            "held_quantity": held_quantity,
+            "expected_recorded_grams": max(expected_recorded, 0.0),
+            "allocatable_grams": max(round(float(specimen["available_quantity"]) - held_quantity, 6), 0.0),
             "active_placement_grams": placed_weight,
-            "available_matches_ledger": abs(float(specimen["available_quantity"]) - expected_available) < 1e-6,
-            "placements_within_available": placed_weight <= float(specimen["available_quantity"]) + 1e-6,
+            # 账面可用量必须等于“实体存量 - 未履行占用”
+            "available_matches_ledger": abs(float(specimen["available_quantity"]) - expected_recorded) < 1e-6,
+            "no_oversubscription": physical_available + 1e-6 >= held_quantity,
+            "placements_within_available": placed_weight <= physical_available + 1e-6,
         }

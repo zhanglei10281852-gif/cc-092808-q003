@@ -16,6 +16,9 @@ from app.forensics.schemas import (
     ObservationCreate,
     ReleaseCreate,
     ReleaseDecision,
+    ReleaseCancel,
+    ReleaseFulfill,
+    AllocationRepair,
     HoldCreate,
     HoldRelease,
     LocationCreate,
@@ -346,6 +349,50 @@ def decide_release(
     principal.require("release.approve")
     with transaction(immediate=True) as connection:
         return ForensicService(connection).release.decide(request_id, data.model_dump(mode="json"))
+
+
+@router.post("/releases/{request_id}/cancel")
+def cancel_release(
+    request_id: int,
+    data: ReleaseCancel,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("forensic_cases.read")
+    with transaction(immediate=True) as connection:
+        return ForensicService(connection).release.cancel(request_id, data.model_dump(mode="json"))
+
+
+@router.post("/releases/{request_id}/fulfill")
+def fulfill_release(
+    request_id: int,
+    data: ReleaseFulfill,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("release.approve")
+    with transaction(immediate=True) as connection:
+        return ForensicService(connection).release.fulfill(request_id, data.model_dump(mode="json"))
+
+
+@router.get("/allocations/audit")
+def audit_allocations(
+    specimen_id: int | None = None,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("custody.read")
+    return ForensicService(get_connection()).release.audit_allocations(specimen_id)
+
+
+@router.post("/allocations/repair")
+def repair_allocations(
+    data: AllocationRepair,
+    specimen_id: int | None = None,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("release.approve")
+    with transaction(immediate=True) as connection:
+        return ForensicService(connection).release.repair_allocations(
+            specimen_id, actor=data.actor
+        )
 
 
 @router.get("/releases/{request_id}")
