@@ -162,8 +162,13 @@ class CustodyService:
         if holds:
             raise ConflictError("检材存在未解除的保全、质量或权限冻结", context={"holds": [item["id"] for item in holds]})
         quantity = float(data["quantity"])
-        if quantity > float(specimen["available_quantity"]) + 1e-9:
-            raise ConflictError("检材可用数量不足")
+        held_quantity = self.repository.held_quantity(int(specimen["id"]))
+        allocatable = round(float(specimen["available_quantity"]) - held_quantity, 6)
+        if quantity > allocatable + 1e-9:
+            raise ConflictError(
+                "检材可分配数量不足（需同时扣除尚未履行的批准占用）",
+                context={"available_quantity": specimen["available_quantity"], "held_quantity": held_quantity},
+            )
         timestamp = to_storage(self.clock.now())
         remaining = round(float(specimen["available_quantity"]) - quantity, 6)
         status = "depleted" if remaining <= 1e-9 else specimen["status"]
@@ -231,11 +236,15 @@ class CustodyService:
         placed_weight = float(self.connection.execute(
             "SELECT COALESCE(SUM(quantity),0) FROM specimen_placements WHERE specimen_id=? AND removed_at IS NULL", (specimen_id,)
         ).fetchone()[0])
+        held_quantity = self.repository.held_quantity(specimen_id)
         return {
             "specimen_id": specimen_id,
             "recorded_available_grams": specimen["available_quantity"],
             "expected_available_grams": expected_available,
             "active_placement_grams": placed_weight,
+            "held_grams": round(held_quantity, 6),
+            "allocatable_grams": round(float(specimen["available_quantity"]) - held_quantity, 6),
             "available_matches_ledger": abs(float(specimen["available_quantity"]) - expected_available) < 1e-6,
             "placements_within_available": placed_weight <= float(specimen["available_quantity"]) + 1e-6,
+            "holds_within_available": held_quantity <= float(specimen["available_quantity"]) + 1e-6,
         }

@@ -49,8 +49,12 @@ class ExaminationService:
             raise ValidationError("检验规程与案件鉴定专业不匹配")
         if specimen["status"] in {"depleted", "disposed"}:
             raise ConflictError("耗尽或销毁的检材不能安排检验")
-        if float(data["sample_quantity"]) > float(specimen["available_quantity"]):
-            raise ConflictError("检验取样数量超过检材可用数量")
+        held_quantity = self.repository.held_quantity(specimen["id"])
+        if float(data["sample_quantity"]) > float(specimen["available_quantity"]) - held_quantity + 1e-9:
+            raise ConflictError(
+                "检验取样数量超过检材可分配数量（需扣除尚未履行的批准占用）",
+                context={"available_quantity": specimen["available_quantity"], "held_quantity": held_quantity},
+            )
         active = self.connection.execute(
             "SELECT id FROM examinations WHERE specimen_id=? AND status IN ('scheduled','running')",
             (specimen["id"],),

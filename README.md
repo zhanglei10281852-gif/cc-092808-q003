@@ -23,10 +23,14 @@ python -m pip install -e ".[dev]"
 ```bash
 python -m app.cli init-db
 python -m app.cli check-db
+python -m app.cli release-doctor            # 仅核对历史领用占用
+python -m app.cli release-doctor --repair   # 核对并修复
 uvicorn app.main:app --host 0.0.0.0 --port 8432
 ```
 
 健康检查为 `GET /api/system/health`。首次使用可调用 `POST /api/auth/bootstrap` 创建管理员，再通过 `POST /api/auth/login` 取得 Bearer 会话令牌。鉴定业务接口统一位于 `/api/forensics`。
+
+领用申请的接口为 `POST /releases`、`/releases/{id}/submit`、`/releases/{id}/decision`、`/releases/{id}/cancel`、`/releases/{id}/fulfill`，核对修复入口为 `GET /releases/doctor/check` 与 `POST /releases/doctor/repair`。
 
 ## 测试与构建检查
 
@@ -53,3 +57,5 @@ python -m app.cli demo
 ## 一致性约定
 
 SQLite 连接启用外键、WAL、忙等待和即时写事务。案件档案、库位、容器摆放、检验任务和领用申请采用版本号防止旧请求覆盖新状态；入库、移库、取样和传感读数使用业务键去重。专业检验保留采用的规程版本和每个检查点的观察记录，完成后可依据鉴定专业及风险策略生成下一次复核日期。会话令牌只保存摘要，审计记录不保存明文密码或令牌。
+
+领用审批采用占用模型：批准动作以版本与状态双重条件更新锁定申请行，并在同一事务内为每个明细建立 `release_allocations` 占用（`held`）。检材的可分配量为物理可用量减去全部未履行占用；后续申请、取样与检验排期都同时考虑真实耗用、未履行占用和冻结状态。拒绝不建占用，取消释放占用（`released`），履行把占用转为真实耗用（`consumed`，写入领用台账事件）。任一中间步骤失败都通过保存点回滚，不留孤立明细。申请详情、检材详情和 `/specimens/{id}/reconcile` 可以查看每笔占用、剩余可分配量和最终去向；`release-doctor` 负责核对并修复既有已批准数据。

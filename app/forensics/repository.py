@@ -115,6 +115,24 @@ class ForensicRepository:
             "SELECT * FROM specimen_holds WHERE specimen_id=? AND released_at IS NULL ORDER BY id", (specimen_id,)
         ).fetchall())
 
+    def held_quantity(self, specimen_id: int) -> float:
+        row = self.connection.execute(
+            "SELECT COALESCE(SUM(quantity),0) FROM release_allocations WHERE specimen_id=? AND status='held'",
+            (specimen_id,),
+        ).fetchone()
+        return float(row[0])
+
+    def specimen_allocations(self, specimen_id: int) -> list[dict[str, Any]]:
+        return records(self.connection.execute(
+            "SELECT a.*,r.request_no,r.status AS request_status,i.case_id,c.case_no "
+            "FROM release_allocations a "
+            "JOIN release_requests r ON r.id=a.request_id "
+            "JOIN release_items i ON i.id=a.item_id "
+            "JOIN forensic_cases c ON c.id=i.case_id "
+            "WHERE a.specimen_id=? ORDER BY a.id",
+            (specimen_id,),
+        ).fetchall())
+
     def specimen_detail(self, specimen_id: int) -> dict[str, Any]:
         item = self.require_specimen(specimen_id)
         item["forensic_case"] = self.require_forensic_case(int(item["case_id"]))
@@ -128,6 +146,13 @@ class ForensicRepository:
         item["holds"] = records(self.connection.execute(
             "SELECT * FROM specimen_holds WHERE specimen_id=? ORDER BY id", (specimen_id,)
         ).fetchall())
+        item["allocations"] = self.specimen_allocations(specimen_id)
+        held_quantity = round(sum(float(a["quantity"]) for a in item["allocations"] if a["status"] == "held"), 6)
+        consumed_quantity = round(sum(float(a["quantity"]) for a in item["allocations"] if a["status"] == "consumed"), 6)
+        item["held_quantity"] = held_quantity
+        item["consumed_quantity"] = consumed_quantity
+        item["allocatable_quantity"] = round(float(item["available_quantity"]) - held_quantity, 6)
+        item["frozen"] = bool(item["holds"] and any(not h["released_at"] for h in item["holds"]))
         item["latest_examination"] = record(self.connection.execute(
             "SELECT * FROM examinations WHERE specimen_id=? AND status='completed' ORDER BY completed_at DESC,id DESC LIMIT 1",
             (specimen_id,),
@@ -200,6 +225,11 @@ class ForensicRepository:
             "SELECT i.*,a.case_no,a.discipline FROM release_items i "
             "JOIN forensic_cases a ON a.id=i.case_id WHERE i.request_id=? ORDER BY i.id", (request_id,)
         ).fetchall())
+        allocations = records(self.connection.execute(
+            "SELECT * FROM release_allocations WHERE request_id=? ORDER BY id", (request_id,)
+        ).fetchall())
+        for line in item["items"]:
+            line["allocations"] = [alloc for alloc in allocations if int(alloc["item_id"]) == int(line["id"])]
         return item
 
     def count_table(self, table: str) -> int:

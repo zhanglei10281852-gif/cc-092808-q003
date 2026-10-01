@@ -372,9 +372,27 @@ CREATE TABLE IF NOT EXISTS release_items (
     case_id INTEGER NOT NULL REFERENCES forensic_cases(id) ON DELETE RESTRICT,
     quantity REAL NOT NULL CHECK(quantity > 0),
     allocated_specimen_id INTEGER REFERENCES specimens(id),
-    status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN ('requested','allocated','fulfilled','unavailable')),
+    status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN ('requested','allocated','fulfilled','unavailable','cancelled')),
     UNIQUE(request_id,case_id)
 );
+CREATE TABLE IF NOT EXISTS release_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL REFERENCES release_requests(id) ON DELETE CASCADE,
+    item_id INTEGER NOT NULL REFERENCES release_items(id) ON DELETE CASCADE,
+    specimen_id INTEGER NOT NULL REFERENCES specimens(id) ON DELETE RESTRICT,
+    quantity REAL NOT NULL CHECK(quantity > 0),
+    status TEXT NOT NULL DEFAULT 'held' CHECK(status IN ('held','consumed','released')),
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    consumed_at TEXT,
+    consumed_event_id INTEGER REFERENCES custody_events(id),
+    released_at TEXT,
+    released_by TEXT,
+    release_reason TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_release_alloc_specimen ON release_allocations(specimen_id,status);
+CREATE INDEX IF NOT EXISTS idx_release_alloc_request ON release_allocations(request_id,status);
+CREATE INDEX IF NOT EXISTS idx_release_alloc_item ON release_allocations(item_id,status);
 CREATE TABLE IF NOT EXISTS outbox_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_key TEXT NOT NULL UNIQUE,
@@ -468,10 +486,37 @@ def transaction(*, immediate: bool = False) -> Iterator[sqlite3.Connection]:
         raise
 
 
+def _run_migrations(connection: sqlite3.Connection) -> None:
+    """对既有数据库补齐新结构（init_db 的 CREATE IF NOT EXISTS 不会更新旧表约束）。"""
+    ddl_row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='release_items'"
+    ).fetchone()
+    if ddl_row is not None and "'cancelled'" not in (ddl_row[0] or ""):
+        connection.executescript(
+            '''
+            CREATE TABLE release_items_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id INTEGER NOT NULL REFERENCES release_requests(id) ON DELETE CASCADE,
+                case_id INTEGER NOT NULL REFERENCES forensic_cases(id) ON DELETE RESTRICT,
+                quantity REAL NOT NULL CHECK(quantity > 0),
+                allocated_specimen_id INTEGER REFERENCES specimens(id),
+                status TEXT NOT NULL DEFAULT 'requested'
+                    CHECK(status IN ('requested','allocated','fulfilled','unavailable','cancelled')),
+                UNIQUE(request_id,case_id)
+            );
+            INSERT INTO release_items_new(id,request_id,case_id,quantity,allocated_specimen_id,status)
+            SELECT id,request_id,case_id,quantity,allocated_specimen_id,status FROM release_items;
+            DROP TABLE release_items;
+            ALTER TABLE release_items_new RENAME TO release_items;
+            '''
+        )
+
+
 def init_db() -> None:
     timestamp = to_storage(utc_now())
     with transaction(immediate=True) as connection:
         connection.executescript(SCHEMA)
+        _run_migrations(connection)
         for code, name, resource, action in PERMISSIONS:
             connection.execute(
                 "INSERT OR IGNORE INTO permissions(code,name,resource,action) VALUES(?,?,?,?)",

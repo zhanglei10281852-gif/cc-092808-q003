@@ -15,7 +15,9 @@ from app.forensics.schemas import (
     AlertDecision,
     ObservationCreate,
     ReleaseCreate,
+    ReleaseCancel,
     ReleaseDecision,
+    ReleaseFulfill,
     HoldCreate,
     HoldRelease,
     LocationCreate,
@@ -346,6 +348,42 @@ def decide_release(
     principal.require("release.approve")
     with transaction(immediate=True) as connection:
         return ForensicService(connection).release.decide(request_id, data.model_dump(mode="json"))
+
+
+@router.post("/releases/{request_id}/cancel")
+def cancel_release(
+    request_id: int,
+    data: ReleaseCancel,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("release.approve")
+    with transaction(immediate=True) as connection:
+        return ForensicService(connection).release.cancel(request_id, data.model_dump(mode="json"))
+
+
+@router.post("/releases/{request_id}/fulfill")
+def fulfill_release(
+    request_id: int,
+    data: ReleaseFulfill,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("release.approve")
+    with transaction(immediate=True) as connection:
+        return ForensicService(connection).release.fulfill(request_id, data.model_dump(mode="json"))
+
+
+@router.get("/releases/doctor/check")
+def release_doctor(principal: Principal = Depends(current_principal)) -> dict:
+    principal.require("release.approve")
+    with transaction(immediate=True) as connection:
+        return ForensicService(connection).release.doctor()
+
+
+@router.post("/releases/doctor/repair")
+def release_repair(principal: Principal = Depends(current_principal)) -> dict:
+    principal.require("release.approve")
+    with transaction(immediate=True) as connection:
+        return ForensicService(connection).release.repair(actor=principal.display_name)
 
 
 @router.get("/releases/{request_id}")

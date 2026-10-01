@@ -110,6 +110,15 @@ def export_command(path: str) -> dict:
     return {"path": str(target), "count": total}
 
 
+def release_doctor_command(repair: bool) -> dict:
+    init_db()
+    service = ForensicService(get_connection())
+    if repair:
+        with transaction(immediate=True):
+            return service.release.repair(actor="cli-repair")
+    return service.release.doctor()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="司法鉴定机构运维命令")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -119,6 +128,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("demo", help="写入一组示范入库数据")
     export = subparsers.add_parser("export-forensic_cases", help="导出案件档案")
     export.add_argument("path")
+    release_doctor = subparsers.add_parser("release-doctor", help="核对领用占用与检材可分配量（加 --repair 执行修复）")
+    release_doctor.add_argument("--repair", action="store_true")
     return parser
 
 
@@ -133,6 +144,8 @@ def main() -> int:
             result = smoke_command()
         elif args.command == "demo":
             result = demo_command()
+        elif args.command == "release-doctor":
+            result = release_doctor_command(args.repair)
         else:
             result = export_command(args.path)
         print(json.dumps(result, ensure_ascii=False, indent=2))
